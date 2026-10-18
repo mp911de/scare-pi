@@ -1,0 +1,85 @@
+= Scare Pi
+
+Happy Halloween!
+
+image:docs/scary-eyes.png[width=400]
+
+This is a spooky Halloween Raspberry that has turned itself (well, maybe by the help of other orange tools) into a Halloween thing, looking at you, moaning, and once you come closer, it awakens.
+
+====
+Obviously, this is a https://www.google.com/search?q=pumpkin+pie[pumpkin pie]
+
+image::docs/pumpkin-pi.png[width=200]
+====
+
+It is essentially a https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/[Raspberry Pi Zero 2 W] with two https://www.adafruit.com/product/1855[8x8 LED Matrix (I2C)] as eyes, a https://www.adafruit.com/product/3006[MAX98357A Audio Breakout] for scary sounds and https://www.hlktech.net/index.php?id=1291[LD2420 mmWave sensor] for presence checking.
+
+== Hardware
+
+**Wiring**
+
+image::docs/wiring.png[width=200]
+
+The wiring shows the direct pin connections. For real pumpkin usage, using a T-Cobbler or a perma-proto-board gives you the necessary stability.
+
+=== LED matrices (2 × Adafruit 8x8 LED backpack, HT16K33, I2C)
+
+[%header,cols="m,m,>m"]
+|===
+| Backpack | T-Cobbler | Pi pin
+| VCC (both) | 3V3 | 1
+| GND (both) | GND | 6
+| SDA (both) | SDA, GPIO2 | 3
+| SCL (both) | SCL, GPIO3 | 5
+|===
+
+One backpack has the A0 jumper bridged, which makes it `0x71`. The other stays at `0x70`.
+Left eye `0x70`, right eye `0x71` (`[eyes] addresses` in `scare.toml`).
+
+=== Presence radar (HLK-LD2420, UART)
+
+[%header,cols="m,m,>m"]
+|===
+| LD2420 | T-Cobbler | Pi pin
+| VCC | 3V3 | 17
+| GND | GND | 9
+| OT1 | RXD, GPIO15 | 10
+| RX | TXD, GPIO14 | 8
+|===
+
+Firmware 1.5.3 and newer use TX on OT1 at 115200` baud.
+Older sensors (1.5.2 and below) use TX on OT2 at 256000 baud: wire `OT2` to `RXD` instead and set
+`[radar] baud = 256000`. `python3 ld2420.py --new` prints the firmware version.
+The Pi's UART must be free: no serial console, `enable_uart=1`.
+
+=== Amplifier (Adafruit MAX98357A I2S, mono)
+
+[%header,cols="m,m,>m"]
+|===
+| MAX98357A | T-Cobbler | Pi pin
+| Vin | 5.0V | 2
+| GND | GND | 39
+| BCLK | #18 (GPIO18) | 12
+| LRC | #19 (GPIO19) | 35
+| DIN | #21 (GPIO21) | 40
+| SD | #4 (GPIO4) | 7
+| GAIN | GND | 39
+|===
+
+GAIN tied to GND fixes the gain at 12 dB; left floating, the level drifts.
+SD on GPIO4 lets the driver switch the amplifier on with the stream (`dtoverlay=max98357a,sdmode-pin=4` in `/boot/firmware/config.txt`).
+The one audio stream in `scare.py` never closes, so the amplifier never clicks.
+Speaker on the screw terminal, 4 or 8 Ω.
+
+== Software
+
+Make sure to have Python installed. Cross-check `scare.toml` for settings and launch the director:
+
+[source,bash]
+----
+python3 director.py
+----
+
+== License
+
+This project is Open Source software released under the https://www.apache.org/licenses/LICENSE-2.0.html[Apache 2.0 license].

@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>scare-pi eyes</title>
+<style>
+  body { margin: 0; background: #111; color: #ccc; font: 14px system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 24px; }
+  canvas { background: #000; border-radius: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 720px; }
+  button { background: #222; color: #eee; border: 1px solid #444; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.on { border-color: #f80; color: #f80; }
+  label { display: flex; gap: 8px; align-items: center; }
+  #status { color: #888; min-height: 1.2em; }
+</style>
+<canvas id="c" width="720" height="336"></canvas>
+<div class="row" id="scenes"></div>
+<div class="row">
+  <label>distance <input id="dist" type="range" min="30" max="400" value="400"> <span id="distv">4.0 m</span></label>
+  <label><input id="story" type="checkbox" checked> story mode</label>
+</div>
+<div id="status"></div>
+<script>
+// ---- Eye model, mirrors eyes.py. ----
+// Pose: {open 0..1, px -1..1, py -1..1 (up +), pupil 1|2, bright 0..1, scroll rows}.
+const EYE_SHAPE = ['00111100','01111110','11111111','11111111','11111111','11111111','01111110','00111100'];
+function renderEye(e) {
+  const rows = Math.round(e.open * 8);
+  const top = Math.floor((8 - rows) / 2), bottom = top + rows;
+  const px = Math.round(3.5 + e.px * 2.5), py = Math.round(3.5 - e.py * 2.5);
+  const loX = px - Math.floor(e.pupil / 2), loY = py - Math.floor(e.pupil / 2);
+  const grid = [];
+  for (let y = 0; y < 8; y++) {
+    const row = [];
+    for (let x = 0; x < 8; x++) {
+      let lit = EYE_SHAPE[y][x] === '1' && y >= top && y < bottom;
+      const hole = x >= loX && x < loX + e.pupil && y >= loY && y < loY + e.pupil;
+      if (e.invert) lit = hole; else if (hole) lit = false;
+      if (rows === 0 && y === 3 && !e.invert) lit = EYE_SHAPE[y][x] === '1';
+      row.push(lit ? 1 : 0);
+    }
+    grid.push(row);
+  }
+  const shift = ((Math.round(e.scroll) % 8) + 8) % 8;
+  return shift ? [...grid.slice(-shift), ...grid.slice(0, -shift)] : grid;
+}
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = t => t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2;
+function sample(frames, t) {
+  if (t <= frames[0][0]) return frames[0][1];
+  for (let i = 1; i < frames.length; i++) {
+    const [t0, a] = frames[i-1], [t1, b] = frames[i];
+    if (t <= t1) { const k = ease((t - t0) / (t1 - t0));
+      return { open: lerp(a.open,b.open,k), px: lerp(a.px,b.px,k), py: lerp(a.py,b.py,k), pupil: Math.round(lerp(a.pupil,b.pupil,k)), bright: lerp(a.bright,b.bright,k), scroll: lerp(a.scroll,b.scroll,k), invert: b.invert }; }
+  }
+  return frames[frames.length-1][1];
+}
+const E = (open = 0, px = 0, py = 0, pupil = 2, bright = 1, scroll = 0, invert = false) => ({ open, px, py, pupil, bright, scroll, invert });
+const rnd = (a, b) => a + Math.random() * (b - a);
+const DIM = 0.25, BRIGHT = 1.0;
+
+// ---- Scenes: [leftFrames, rightFrames]; null pose = stay. ----
+const scenes = {
+  sleep: () => { const t = rnd(3,7); const f = [[0,E(0,0,0,2,DIM)],[t,E(0,0,0,2,DIM)],[t+0.2,E(0.2,0,-0.5,2,DIM)],[t+0.5,E(0,0,0,2,DIM)]]; return [f, f]; },
+  wake: () => { const f = [[0,E(0,0,0,2,DIM)],[1.5,E(0.4,0,0,2,DIM)],[1.9,E(0,0,0,2,DIM)],[2.4,E(0.8,0,0,2,0.5)],[3.0,E(1,-0.6,0.2,2,0.5)],[4.0,E(1,0.7,0.2,2,0.5)],[5.0,E(1,0,0,2,DIM)]]; return [f, f]; },
+  lurk: () => { const tx = rnd(-1,1), ty = rnd(-0.6,0.6), h = rnd(1,3); const f = [[0,null],[0.8,E(1,tx,ty,2,DIM)],[0.8+h,E(1,tx,ty,2,DIM)]]; return [f, f]; },
+  roll: () => { const f = [[0,null]]; for (let i = 1; i <= 16; i++) { const a = i/16*2*Math.PI; f.push([i*0.12, E(1, Math.sin(a), Math.cos(a))]); } f.push([2.3, E(1)]); return [f, f]; },
+  crazy: () => { const l = [[0,null],[0.3,E(1)]]; let t = 0.3, scroll = 0;
+    for (const [rounds, step] of [[1,0.12],[2,0.08],[3,0.05]]) for (let i = 0; i < rounds*8; i++) { t += step; scroll += 1; l.push([t, E(1,0,0,2,1,scroll)]); }
+    l.push([t+0.5, E(1,0,0,2,1,scroll)]);
+    return [l, l.map(([t,e]) => [t, e && { ...e, scroll: -e.scroll }])]; },
+  squint: () => { const f = [[0,null],[0.6,E(0.5,0.8,0,2,DIM)],[2.0,E(0.5,0.8,0,2,DIM)],[2.5,E(0.5,-0.8,0,2,DIM)],[4.0,E(0.5,-0.8,0,2,DIM)],[4.5,E(1,0,0,2,DIM)]]; return [f, f]; },
+  track: () => { const k = Math.min(1, Math.max(0, 1 - (dist.value/100 - 0.3) / 3.7)); const b = lerp(0.5, BRIGHT, k); const f = [[0,null],[0.5,E(1,k,k,2,b)],[1.0,E(1,k,k,2,b)]]; return [f, f]; },
+  jumpscare: () => { const f = [[0,null],[0.08,E(1,0.2,0.3,1)],[0.3,E(1,0.2,0.3,1)],[0.4,E(1,-0.2,0.3,1)],[0.5,E(1,0.2,0.3,1)],[0.6,E(1,-0.2,0.3,1)],[2.5,E(1,0,0.3,1)],[3.0,E(1)]]; return [f, f]; },
+  explode: () => { const f = [[0,null],[0.4,E(1,0,0,2,1,0,true)],[1.4,E(1,0,0,2,1,0,true)],[2.6,E(1,0,0,9,1,0,true)],[2.8,E(1,0,0,9,0,0,true)],[3.3,E(1)]]; return [f, f]; },
+  doze: () => { const f = [[0,null],[2.0,E(0.4,0,-0.3,2,DIM)],[2.6,E(0.9,0,0,2,DIM)],[4.5,E(0.3,0,-0.4,2,DIM)],[6.0,E(0,0,0,2,DIM)]]; return [f, f]; },
+};
+const LAYERS = { sleep: ['pulse'], lurk: ['blink','pulse'], squint: ['blink','pulse'], wake: ['blink','pulse'], track: ['blink'], doze: ['blink','pulse'], roll: [], crazy: [], jumpscare: [], explode: [] };
+const PULSE_DEPTH = { sleep: 0.3 }, AWAKE_DEPTH = 0.7;
+const BLINK_EVERY = [2.5, 6.0], BLINK_SECONDS = 0.24, PULSE_PERIOD = 1.1;
+const story = ['sleep','sleep','wake','lurk','lurk','squint','lurk','roll','lurk','crazy','lurk','explode','lurk','doze','sleep'];
+function heartbeat(t, depth) { const ph = (t % PULSE_PERIOD) / PULSE_PERIOD, bump = (c, w) => Math.exp(-(((ph - c) / w) ** 2)); return 1 - depth + depth * Math.max(bump(0, 0.07), 0.7 * bump(0.22, 0.07)); }
+let nextBlink = rnd(...BLINK_EVERY);
+function blink(e, t) {
+  if (e.open < 0.9) return e;
+  if (t >= nextBlink + BLINK_SECONDS) nextBlink = t + rnd(...BLINK_EVERY);
+  if (t < nextBlink) return e;
+  const k = (t - nextBlink) / BLINK_SECONDS;
+  return { ...e, open: e.open * (1 - Math.sin(k * Math.PI)) };
+}
+
+// ---- Player ----
+const ctx = c.getContext('2d'), dist = document.getElementById('dist');
+let cur = { l: E(), r: E() }, clip = null, clipStart = 0, queue = [], name = '', t0 = performance.now();
+const resolve = (frames, pose) => frames.map(([t, e]) => [t, e ?? pose]);
+function play(n) { const [l, r] = scenes[n](); clip = { l: resolve(l, cur.l), r: resolve(r, cur.r) }; clipStart = performance.now(); name = n;
+  document.querySelectorAll('#scenes button').forEach(b => b.classList.toggle('on', b.textContent === n)); }
+function drawMatrix(ox, e) {
+  const grid = renderEye(e), a = 0.15 + 0.85 * e.bright;
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    ctx.beginPath(); ctx.arc(ox + 20 + x * 36, 42 + y * 36, 13, 0, 7);
+    ctx.fillStyle = grid[y][x] ? `rgba(255,140,26,${a})` : '#1a1208'; ctx.fill();
+    if (grid[y][x]) { ctx.shadowColor = `rgba(255,140,26,${a})`; ctx.shadowBlur = 18 * e.bright + 4; ctx.fill(); ctx.shadowBlur = 0; }
+  }
+}
+function tick(now) {
+  const clock = (now - t0) / 1000;
+  if (clip) {
+    const t = (now - clipStart) / 1000, end = Math.max(clip.l.at(-1)[0], clip.r.at(-1)[0]);
+    cur = { l: sample(clip.l, t), r: sample(clip.r, t) };
+    if (t >= end) { clip = null; if (story.checked) { queue.length || queue.push(...story); play(queue.shift()); } }
+  }
+  let shown = [cur.l, cur.r];
+  const layers = LAYERS[name] ?? [];
+  if (layers.includes('blink')) shown = shown.map(e => blink(e, clock));
+  if (layers.includes('pulse')) { const b = heartbeat(clock, PULSE_DEPTH[name] ?? AWAKE_DEPTH); shown = shown.map(e => ({ ...e, bright: e.bright * b })); }
+  ctx.clearRect(0, 0, c.width, c.height);
+  drawMatrix(49, shown[0]); drawMatrix(379, shown[1]);
+  status.textContent = name + (dist.value < 400 ? `  ·  presence at ${(dist.value/100).toFixed(1)} m` : '');
+  requestAnimationFrame(tick);
+}
+for (const n of Object.keys(scenes)) { const b = document.createElement('button'); b.textContent = n; b.onclick = () => { queue = []; play(n); }; document.getElementById('scenes').append(b); }
+dist.oninput = () => { distv.textContent = (dist.value/100).toFixed(1) + ' m'; if (dist.value < 400) { queue = []; play('track'); } };
+play('sleep'); requestAnimationFrame(tick);
+</script>

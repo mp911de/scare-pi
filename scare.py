@@ -2,7 +2,7 @@
 """The Halloween show: LD2420 radar, two HT16K33 eyes, one audio stream, one process.
 
 python3 scare.py                        # reads scare.toml next to this file
-python3 scare.py --fake 1.5             # no radar; pretend a visitor stands at 1.5 m
+python3 scare.py --simulated-presence-distance 1.5   # no radar; a visitor at 1.5 m
 Ctrl+C blanks the eyes and closes the stream.
 """
 import argparse
@@ -17,7 +17,7 @@ import ld2420
 from director import Director
 
 
-class FakeRadar:
+class SimulatedRadar:
     """Stands in for ld2420.Radar: a visitor at a fixed distance, or nobody."""
     def __init__(self, distance):
         self.distance = distance
@@ -44,14 +44,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--config', default=pathlib.Path(__file__).with_name('scare.toml'))
-    parser.add_argument('--fake', type=float, help='distance in m instead of the radar')
+    parser.add_argument('--simulated-presence-distance', type=float, metavar='M',
+                        help='no radar; a visitor standing at this distance in metres')
     parser.add_argument('--trace', action='store_true', help='log radar bytes to stderr')
     args = parser.parse_args()
     config = tomllib.loads(pathlib.Path(args.config).read_text())
     root = pathlib.Path(args.config).parent
     sounds = [audio.load(path) for path in sorted((root / config['sounds']['dir']).glob('*.wav'))]
     from smbus2 import SMBus
-    radar = FakeRadar(args.fake) if args.fake is not None else open_radar(config['radar'], args.trace)
+    simulated = args.simulated_presence_distance
+    radar = SimulatedRadar(simulated) if simulated is not None else open_radar(config['radar'], args.trace)
     mixer = audio.Mixer(config['audio']['device'])
     player = eyes.Player()
     director = Director(config, player, mixer, sounds)

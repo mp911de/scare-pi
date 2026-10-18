@@ -47,10 +47,10 @@ Left eye `0x70`, right eye `0x71` (`[eyes] addresses` in `scare.toml`).
 | RX | TXD, GPIO14 | 8
 |===
 
-Firmware 1.5.3 and newer use TX on OT1 at 115200` baud.
+Firmware 1.5.3 and newer use TX on OT1 at 115200 baud.
 Older sensors (1.5.2 and below) use TX on OT2 at 256000 baud: wire `OT2` to `RXD` instead and set
 `[radar] baud = 256000`. `python3 ld2420.py --new` prints the firmware version.
-The Pi's UART must be free: no serial console, `enable_uart=1`.
+The Pi's UART must be free: no serial console, `enable_uart=1` (see <<software>>).
 
 === Amplifier (Adafruit MAX98357A I2S, mono)
 
@@ -66,18 +66,109 @@ The Pi's UART must be free: no serial console, `enable_uart=1`.
 | GAIN | GND | 39
 |===
 
-GAIN tied to GND fixes the gain at 12 dB; left floating, the level drifts.
+GAIN tied to GND fixes the gain at 12 dB (when left floating, the level drifts).
 SD on GPIO4 lets the driver switch the amplifier on with the stream (`dtoverlay=max98357a,sdmode-pin=4` in `/boot/firmware/config.txt`).
 The one audio stream in `scare.py` never closes, so the amplifier never clicks.
 Speaker on the screw terminal, 4 or 8 Ω.
 
+[[software]]
 == Software
 
-Make sure to have Python installed. Cross-check `scare.toml` for settings and launch the director:
+Plain Python 3.11+ on Raspberry Pi OS, no virtualenv, no build step.
+The whole show is one process: `scare.py` reads the radar, drives the eyes and
+feeds one never-closing audio stream (to avoid amplifier clicks, SD mode already helps with these but on my system, they never went fully away).
+
+=== Pi setup
+
+Packages:
 
 [source,bash]
 ----
-python3 director.py
+sudo apt install alsa-utils python3-serial python3-smbus2 ffmpeg
+----
+
+`/boot/firmware/config.txt`:
+
+[source,ini]
+----
+dtparam=i2c_arm=on
+enable_uart=1
+dtoverlay=max98357a,sdmode-pin=4
+----
+
+Disable the serial console (`sudo raspi-config` -> `Interface Options` -> `Serial Port`:
+login shell *no*, hardware *yes*), then reboot. `/dev/serial0` is the radar.
+
+Volume: the MAX98357A has no volume control, so `~/.asoundrc` adds an ALSA
+softvol and makes it the default device:
+
+[source]
+----
+pcm.softvol {
+    type softvol
+    slave.pcm "plughw:1,0"
+    control { name "Volume"; card 1 }
+    max_dB 0.0
+}
+pcm.!default {
+    type plug
+    slave.pcm "softvol"
+}
+ctl.!default {
+    type hw
+    card 1
+}
+----
+
+After the first playback the control exists: `amixer -c 1 sset Volume 50%`.
+
+=== Sounds
+
+Drop wav files into `sounds/`: 44.1 kHz, stereo, 16 bit. Every sound moment
+(arrival, jumpscare, leaving, ambience while asleep) picks one at random.
+Convert anything else with ffmpeg:
+
+[source,bash]
+----
+ffmpeg -i moan.ogg -ac 2 -ar 44100 -c:a pcm_s16le sounds/moan.wav
+----
+
+=== Run
+
+Check `scare.toml` (distances, cooldown, I2C addresses, matrix rotation), then:
+
+[source,bash]
+----
+python3 scare.py                # the show. Ctrl+C for exit and turns the eyes off
+python3 scare.py --simulated-presence-distance 1.5   # no radar: a visitor at 1.5 m
+----
+
+Autostart on boot:
+
+[source,bash]
+----
+sudo cp scary.service /etc/systemd/system/
+sudo systemctl enable --now scary
+journalctl -fu scary
+----
+
+=== Try each part individually
+
+[source,bash]
+----
+python3 eyes.py                 # eye story loop on the matrices
+python3 eyes.py --all --cap 2   # every scene, 2 s each
+python3 eyes.py explode crazy   # named scenes
+python3 ld2420.py --new         # radar handshake, firmware, 1 Hz presence log
+python3 audio_test.py sounds/T01.wav   # beep, sound, beep in one stream
+python3 matrix_test.py          # blink both matrices
+----
+
+=== Develop
+
+[source,bash]
+----
+make test                       # eye model and director tests, no hardware needed
 ----
 
 == License

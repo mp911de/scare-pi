@@ -1,0 +1,13 @@
+[Unit]
+Description=scare-pi Halloween show
+After=sound.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/scare-pi
+ExecStart=/usr/bin/python3 scare.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

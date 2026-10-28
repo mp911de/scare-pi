@@ -12,6 +12,7 @@ absence = 4.0
 [story]
 sleep_sound_every = [10, 10]
 scare_cooldown = 20
+sound_every = 60
 retrack = 0.3
 ''')
 SOUNDS = ['boo', 'zzz']
@@ -49,6 +50,14 @@ class DirectorTest(unittest.TestCase):
         self.assertEqual(scenes[:4], ['sleep', 'sleep', 'wake', 'lurk'])
         self.assertTrue(self.mixer.played, 'ambience sound while asleep')
 
+    def test_easter_egg_replaces_a_lurk(self):
+        config = dict(CONFIG, easter_egg={'chance': 1.0}, story=dict(CONFIG['story'], sleep_sound_every=[100, 100]))
+        self.director = Director(config, self.player, self.mixer, SOUNDS, egg='kitt',
+                                 choice=lambda options: options[0], uniform=lambda a, b: a)
+        scenes = self.run_story(30)
+        self.assertEqual(scenes[:4], ['sleep', 'sleep', 'wake', 'kitt'])
+        self.assertIn('kitt', self.mixer.played)
+
     def test_arrival_notices_and_tracks(self):
         self.run_story(1)
         scenes = self.run_story(2, present=True, distance=3.0)
@@ -71,7 +80,9 @@ class DirectorTest(unittest.TestCase):
         self.assertEqual(self.player.scene, 'track')
         self.director.update(22, True, 0.5)
         self.assertEqual(self.player.scene, 'jumpscare')
-        self.assertEqual(self.mixer.played, ['boo', 'boo', 'boo'])
+        self.assertEqual(self.mixer.played, ['boo'], 'arrival sound, no sound within sound_every')
+        self.director.update(62, True, 0.5)
+        self.assertEqual(self.mixer.played, ['boo', 'boo'])
 
     def test_leaving_dozes_after_absence(self):
         self.director.update(0, True, 2.0)
@@ -79,7 +90,7 @@ class DirectorTest(unittest.TestCase):
         self.assertEqual(self.player.scene, 'track')
         self.director.update(4.5, False, None)
         self.assertEqual(self.player.scene, 'doze')
-        self.assertEqual(len(self.mixer.played), 2)
+        self.assertEqual(len(self.mixer.played), 1, 'leaving sound held back by sound_every')
         self.director.update(20, False, None)
         self.assertEqual(self.player.scene, 'sleep')
 

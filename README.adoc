@@ -71,6 +71,21 @@ SD on GPIO4 lets the driver switch the amplifier on with the stream (`dtoverlay=
 The one audio stream in `scare.py` never closes, so the amplifier never clicks.
 Speaker on the screw terminal, 4 or 8 Ω.
 
+=== Mouth (SK6812 RGBW strip, SPI, optional)
+
+[%header,cols="m,m,>m"]
+|===
+| SK6812 | T-Cobbler | Pi pin
+| 5V | 5.0V | 4
+| GND | GND | 34
+| DIN | MOSI (GPIO10) | 19
+|===
+
+Ten pixels are enough, cut the strip after them (the rest would idle at about 1 mA each).
+The Pi drives DIN with 3.3 V against a 3.4 V threshold, which works on a short lead, otherwise put a 74AHCT125 in between.
+White on ten pixels draws up to 0.8 A, so give the Pi a 2.5 A supply.
+Set `enabled = true` in `[mouth]` of `scare.toml`. `pin` is the data GPIO, 10 is the only free SPI MOSI (20 clashes with I2S).
+
 [[software]]
 == Software
 
@@ -84,7 +99,7 @@ Packages:
 
 [source,bash]
 ----
-sudo apt install alsa-utils python3-serial python3-smbus2 ffmpeg
+sudo apt install alsa-utils python3-serial python3-smbus2 python3-spidev ffmpeg
 ----
 
 `/boot/firmware/config.txt`:
@@ -94,6 +109,8 @@ sudo apt install alsa-utils python3-serial python3-smbus2 ffmpeg
 dtparam=i2c_arm=on
 enable_uart=1
 dtoverlay=max98357a,sdmode-pin=4
+dtparam=spi=on       # mouth only
+core_freq=250        # mouth only: SK6812 bit timing comes from the SPI clock
 ----
 
 Disable the serial console (`sudo raspi-config` -> `Interface Options` -> `Serial Port`:
@@ -133,6 +150,10 @@ Convert anything else with ffmpeg:
 ffmpeg -i moan.ogg -ac 2 -ar 44100 -c:a pcm_s16le sounds/moan.wav
 ----
 
+Easter egg: `[easter_egg]` in `scare.toml` names a sound outside the pool and a
+chance. Now and then, while nobody is around, the eyes and mouth turn into the
+KITT scanner with that sound.
+
 === Run
 
 Check `scare.toml` (distances, cooldown, I2C addresses, matrix rotation), then:
@@ -159,6 +180,7 @@ journalctl -fu scary
 python3 eyes.py                 # eye story loop on the matrices
 python3 eyes.py --all --cap 2   # every scene, 2 s each
 python3 eyes.py explode crazy   # named scenes
+python3 mouth.py --all --cap 2  # the same scenes on the strip
 python3 ld2420.py --new         # radar handshake, firmware, 1 Hz presence log
 python3 audio_test.py sounds/T01.wav   # beep, sound, beep in one stream
 python3 matrix_test.py          # blink both matrices

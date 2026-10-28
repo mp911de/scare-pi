@@ -161,6 +161,15 @@ def explode_scene(d):
     return f, f
 
 
+def kitt_scene(d):
+    # Easter egg: the scanner. Both pupils sweep side to side, four passes in the 4.2 s chime.
+    f = [(0, None), (0.3, E(1, -1, 0))]
+    for i in range(1, 9):
+        f.append((0.3 + i * 0.5, E(1, 1 if i % 2 else -1, 0)))
+    f.append((4.8, E(1)))
+    return f, f
+
+
 def doze_scene(d):
     f = [(0, None), (2.0, E(0.4, 0, -0.3, bright=DIM)), (2.6, E(0.9, bright=DIM)),
          (4.5, E(0.3, 0, -0.4, bright=DIM)), (6.0, E(bright=DIM))]
@@ -172,7 +181,7 @@ SCENES = {name[:-6]: fn for name, fn in globals().items() if name.endswith('_sce
 # seconds, 'pulse' modulates brightness like a resting heartbeat.
 LAYERS = {'sleep': {'pulse'}, 'lurk': {'blink', 'pulse'}, 'squint': {'blink', 'pulse'},
           'wake': {'blink', 'pulse'}, 'track': {'blink'}, 'doze': {'blink', 'pulse'}, 'roll': set(),
-          'crazy': set(), 'jumpscare': set(), 'explode': set()}
+          'crazy': set(), 'jumpscare': set(), 'explode': set(), 'kitt': set()}
 BLINK_EVERY, BLINK_SECONDS = (2.5, 6.0), 0.24
 PULSE_PERIOD = 1.1
 PULSE_DEPTH = {'sleep': 0.3}   # how far the beat dips below full brightness; others use AWAKE_DEPTH

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Halloween show: LD2420 radar, two HT16K33 eyes, one audio stream, one process.
+"""The Halloween show: LD2420 radar, two HT16K33 eyes, an optional SK6812 mouth, one audio stream, one process.
 
 python3 scare.py                        # reads scare.toml next to this file
 python3 scare.py --simulated-presence-distance 1.5   # no radar; a visitor at 1.5 m
@@ -14,6 +14,7 @@ import tomllib
 import audio
 import eyes
 import ld2420
+import mouth
 from director import Director
 
 
@@ -56,26 +57,34 @@ def main():
     radar = SimulatedRadar(simulated) if simulated is not None else open_radar(config['radar'], args.trace)
     mixer = audio.Mixer(config['audio']['device'])
     player = eyes.Player()
-    director = Director(config, player, mixer, sounds)
-    e = config['eyes']
+    egg = config.get('easter_egg')
+    director = Director(config, player, mixer, sounds, audio.load(root / egg['sound']) if egg else None)
+    e, m = config['eyes'], config['mouth']
+    strip = mouth.Strip(m['pin'], m['leds'], m['channel_colors'], m['brightness']) if m['enabled'] else None
     try:
         with SMBus(1) as bus:
             matrices = eyes.Matrices(bus, e['addresses'], 15, e['rotate'])
             try:
-                reading = ''
+                logged, logged_at = None, float('-inf')
                 while True:
                     radar.poll()
                     now = time.monotonic()
                     present, distance, reason = radar.reading.state(now)
                     director.update(now, present, distance)
-                    line = f'{player.scene:<10} presence={present} {reason}'
-                    if line != reading:  # log scene and presence changes, not every centimetre
-                        reading = line
-                        print(f'{time.strftime("%H:%M:%S")} {line} at {distance} m', flush=True)
-                    matrices.show(player.tick(now))
+                    state = (player.scene, present, distance, reason)
+                    if state != logged and now - logged_at >= 1.0:  # on change, at most 1 Hz
+                        logged, logged_at = state, now
+                        print(f'{time.strftime("%H:%M:%S")} {player.scene:<10} presence={present} '
+                              f'{reason} at {distance} m', flush=True)
+                    shown = player.tick(now)
+                    matrices.show(shown)
+                    if strip:
+                        strip.show(mouth.frame(player.scene, shown, now - player.started, strip.count))
                     time.sleep(1 / e['fps'])
             finally:
                 matrices.blank()
+                if strip:
+                    strip.blank()
     except KeyboardInterrupt:
         print('\nStopped.')
     finally:

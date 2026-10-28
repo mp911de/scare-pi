@@ -3,14 +3,21 @@
 [radar]
 port = "/dev/serial0"
 baud = 115200          # firmware >= 1.5.3; 256000 for older sensors
-far = 4.0              # presence counts from here inwards
-near = 1.0             # closer than this triggers the jumpscare
-absence = 4.0          # no presence for this long = visitors are gone
+far = 3.0              # meters presence counts from here inwards
+near = 1.5             # meters closer than this triggers the jumpscare
+absence = 60           # no presence for <absence> seconds = visitors are gone
 
 [eyes]
 addresses = [0x70, 0x71]
-rotate = 1
+rotate = 3
 fps = 25
+
+[mouth]
+enabled = true         # SK6812 strip for the mouth; leave off if CPU, pins or power run short
+pin = 10               # GPIO10 = SPI0 MOSI (header pin 19); needs dtparam=spi=on, core_freq=250
+leds = 10              # pixels used from the start of the strip
+channel_colors = "GRBW"
+brightness = [0.2, 0.4]   # min, max: the eyes' dim..full level maps into this window (gamma 2.2 after)
 
 [audio]
 device = "default"     # ALSA softvol in ~/.asoundrc on the Pi; amixer sset Volume 20%
@@ -18,7 +25,12 @@ device = "default"     # ALSA softvol in ~/.asoundrc on the Pi; amixer sset Volu
 [sounds]
 dir = "sounds"         # every wav in here; each sound moment picks one at random
 
+[easter_egg]
+sound = "sounds/easter/kitt.wav"   # the scanner chime, kept out of the random pool
+chance = 0.05                      # per lurk scene while nobody is there
+
 [story]
 sleep_sound_every = [60, 180]   # random wait between ambience sounds, min and max
 scare_cooldown = 20             # one jumpscare, then wait this long before the next
+sound_every = 60                # at most one sound per this many seconds, whatever the reason
 retrack = 0.3                   # re-aim the eyes when the distance moved by this much

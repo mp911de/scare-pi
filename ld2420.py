@@ -3,6 +3,9 @@
 
 python3 ld2420.py --new                 # >=1.5.3: 115200 baud, OT1 -> Pi RX
 python3 ld2420.py --old                 # <=1.5.2: 256000 baud, OT2 -> Pi RX
+python3 ld2420.py --new --energies      # also print the 16 gate energies
+python3 ld2420.py --new show            # stored gate thresholds, min/max gate, timeout
+python3 ld2420.py --new calibrate       # raise thresholds above an empty scene's peaks
 Add --port /dev/ttyUSB0 to override /dev/serial0. Requires pyserial.
 Pi TX connects to sensor RX. The mode flag cannot switch physical wiring.
 
@@ -119,6 +122,7 @@ class Reading:
     distance_cm: int | None = None
     last_report: float | None = None
     last_range_at: float | None = None
+    energies: tuple = ()
 
     def update(self, line, now):
         # handle_simple_mode_ scans ON/OFF and decimal digits in a CRLF line;
@@ -142,6 +146,7 @@ class Reading:
         # frame[9:41] sixteen uint16 energies; ld2420.h: 45-byte frame.
         self.present = bool(body[0])
         self.distance_cm = struct.unpack_from('<H', body, 1)[0]
+        self.energies = struct.unpack_from(f'<{TOTAL_GATES}H', body, 3)
         self.last_report = self.last_range_at = now
 
     def state(self, now):
@@ -244,14 +249,77 @@ class Radar:
         name = 'Binary energy' if self.mode == ENERGY_MODE else 'Simple text'
         print(f'{name} reporting enabled. Software cutoff: 5.00 m.', flush=True)
 
-    def monitor(self):
+    def configured(self, action):
+        """Run action inside configuration mode; leaving it also saves parameters to flash."""
+        self.command(0x00FF, struct.pack('<H', 2))
+        try:
+            return action()
+        finally:
+            self.command(0x00FE)
+
+    def read_params(self, registers):
+        # CMD_READ_ABD_PARAM: uint16 registers in, uint32 values out, 4-byte stride from frame[10].
+        data = self.command(0x0008, struct.pack(f'<{len(registers)}H', *registers))
+        return struct.unpack_from(f'<{len(registers)}I', data)
+
+    def write_params(self, pairs):
+        # CMD_WRITE_ABD_PARAM: (uint16 register, uint32 value) pairs. Gate thresholds
+        # live at 0x0010 + gate (move) and 0x0020 + gate (still).
+        payload = b''.join(struct.pack('<HI', register, value) for register, value in pairs)
+        self.command(0x0007, payload)
+
+    def show(self):
+        def read():
+            min_gate, max_gate, timeout = self.read_params([0x0000, 0x0001, 0x0004])
+            print(f'min gate {min_gate}  max gate {max_gate} ({max_gate * 0.7:.1f} m)  timeout {timeout} s')
+            print(f'{"gate":>4} {"range":>7} {"move":>6} {"still":>6}')
+            for gate in range(TOTAL_GATES):
+                move, still = self.read_params([0x0010 + gate, 0x0020 + gate])
+                print(f'{gate:>4} {gate * 0.7:5.1f} m {move:>6} {still:>6}')
+        self.configured(read)
+
+    def calibrate(self, seconds, move_factor, still_factor, max_gate, timeout):
+        """ESPHome's auto calibration: peak energy per gate over an empty scene, thresholds
+        at peak * (factor + 2) for move and peak * (factor / 2 + 2) for still. A gate never
+        drops below its stored threshold, so calibration only ever makes it less sensitive."""
+        if self.mode != ENERGY_MODE:
+            raise ProtocolError('Calibration needs energy reporting (firmware >= 1.5.4)')
+        stored = self.configured(lambda: [self.read_params([0x0010 + g, 0x0020 + g]) for g in range(TOTAL_GATES)])
+        print(f'Keep the scene empty for {seconds:.0f} s ...', flush=True)
+        peaks = [0] * TOTAL_GATES
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self.poll()
+            peaks = [max(p, e) for p, e in zip(peaks, self.reading.energies or peaks)]
+        move = [min(65535, max(m, int(p * (move_factor + 2)))) for p, (m, _) in zip(peaks, stored)]
+        still = [min(65535, max(s, int(p * (still_factor / 2 + 2)))) for p, (_, s) in zip(peaks, stored)]
+        print(f'{"gate":>4} {"range":>7} {"peak":>6} {"move":>6} {"still":>6}')
+        for gate in range(TOTAL_GATES):
+            changed = ' *' if (move[gate], still[gate]) != tuple(stored[gate]) else ''
+            print(f'{gate:>4} {gate * 0.7:5.1f} m {peaks[gate]:>6} {move[gate]:>6} {still[gate]:>6}{changed}')
+
+        def write():
+            for gate in range(TOTAL_GATES):
+                self.write_params([(0x0010 + gate, move[gate]), (0x0020 + gate, still[gate])])
+            if max_gate is not None:
+                self.write_params([(0x0001, max_gate)])
+            if timeout is not None:
+                self.write_params([(0x0004, timeout)])
+        self.configured(write)
+        print('Written and saved (* = raised).', flush=True)
+
+    def monitor(self, energies=False):
         print('Printing at 1 Hz; Ctrl+C to stop.', flush=True)
+        if energies:
+            print('gates:    ' + ' '.join(f'{gate * 0.7:5.1f}m' for gate in range(TOTAL_GATES)))
         deadline = time.monotonic() + 1.0
         while True:
             self.poll()
             now = time.monotonic()
             if now >= deadline:
                 print(f'{time.strftime("%H:%M:%S")} {self.reading.summary(now)}', flush=True)
+                if energies and self.reading.energies:
+                    print('energies: ' + ' '.join(f'{e:6d}' for e in self.reading.energies), flush=True)
                 deadline += 1.0
                 if deadline <= now:
                     deadline = now + 1.0
@@ -265,6 +333,18 @@ def main():
     modes.add_argument('--new', action='store_true', help='115200 baud; sensor TX is OT1')
     parser.add_argument('--port', default='/dev/serial0', help='UART device (default: /dev/serial0)')
     parser.add_argument('--trace', action='store_true', help='Log actual TX/RX bytes to stderr')
+    parser.add_argument('--energies', action='store_true',
+                        help='Also print the 16 gate energies (0.7 m per gate), firmware >= 1.5.4')
+    parser.add_argument('action', nargs='?', default='monitor', choices=['monitor', 'show', 'calibrate'],
+                        help='monitor presence (default), show the stored thresholds, '
+                             'or calibrate them against an empty scene')
+    parser.add_argument('--seconds', type=float, default=20, help='calibrate: sampling time')
+    parser.add_argument('--move-factor', type=float, default=0.5, help='calibrate: ESPHome default 0.5')
+    parser.add_argument('--still-factor', type=float, default=0.5, help='calibrate: ESPHome default 0.5')
+    parser.add_argument('--max-gate', type=int, choices=range(1, TOTAL_GATES),
+                        help='calibrate: also limit detection to this gate (0.7 m each)')
+    parser.add_argument('--timeout', type=int,
+                        help='calibrate: also set how many seconds presence lingers after the last detection')
     args = parser.parse_args()
     baud = 256000 if args.old else 115200
     try:
@@ -276,7 +356,12 @@ def main():
             port.reset_input_buffer()
             radar = Radar(port, trace=args.trace)
             radar.initialize()
-            radar.monitor()
+            if args.action == 'show':
+                radar.show()
+            elif args.action == 'calibrate':
+                radar.calibrate(args.seconds, args.move_factor, args.still_factor, args.max_gate, args.timeout)
+            else:
+                radar.monitor(args.energies)
     except KeyboardInterrupt:
         print('\nStopped; UART closed.')
         return 0
